@@ -75,6 +75,11 @@ func createBook(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	if _, exists := storage[newBook.ID]; exists {
+		http.Error(w, "Record already exists", http.StatusBadRequest)
+		return
+	}
+
 	mu.Lock()
 	storage[newBook.ID] = newBook
 	mu.Unlock()
