@@ -1,11 +1,10 @@
 package main
 
 import (
-	"encoding/json"
 	"net/http"
 	"sync"
 
-	"github.com/gorilla/mux"
+	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 )
 
@@ -15,144 +14,129 @@ type Book struct {
 	Author string `json:"author"`
 }
 
-var storage = make(map[string]Book)
-var mu = &sync.Mutex{}
+type BookService struct {
+	Storage map[string]Book
+	Mu      *sync.RWMutex
+	Logger  *logrus.Logger
+}
 
-func logError(err error, req *http.Request, message string) {
-	logrus.WithFields(logrus.Fields{
+func (bs *BookService) logError(err error, c *gin.Context, message string) {
+	bs.Logger.WithFields(logrus.Fields{
 		"error":    err.Error(),
-		"method":   req.Method,
-		"endpoint": req.URL.Path,
+		"method":   c.Request.Method,
+		"endpoint": c.FullPath(),
 	}).Error(message)
 }
 
-func returnAllBooks(w http.ResponseWriter, req *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	mu.Lock()
-	defer mu.Unlock()
+func (bs *BookService) returnAllBooks(c *gin.Context) {
+	bs.Mu.RLock()
+	defer bs.Mu.RUnlock()
 
 	var books []Book
 
-	for _, book := range storage {
+	for _, book := range bs.Storage {
 		books = append(books, book)
 	}
 
-	if err := json.NewEncoder(w).Encode(books); err != nil {
-		logError(err, req, "Error when encoding JSON")
-		return
-	}
+	c.JSON(http.StatusOK, books)
 }
 
-func returnBooksByID(w http.ResponseWriter, req *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+func (bs *BookService) returnBooksByID(c *gin.Context) {
 
-	vars := mux.Vars(req)
-	bookID := vars["id"]
+	bookID := c.Param("id")
 
-	mu.Lock()
-	book, exist := storage[bookID]
-	mu.Unlock()
+	bs.Mu.RLock()
+	book, exist := bs.Storage[bookID]
+	bs.Mu.RUnlock()
 
 	if !exist {
-		http.Error(w, "Record not found", http.StatusNotFound)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Record not found"})
 		return
 	}
 
-	if err := json.NewEncoder(w).Encode(book); err != nil {
-		logError(err, req, "Error when encoding JSON")
-		return
-	}
+	c.JSON(http.StatusOK, book)
 }
 
-func createBook(w http.ResponseWriter, req *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+func (bs *BookService) createBook(c *gin.Context) {
 
 	var newBook Book
-	if err := json.NewDecoder(req.Body).Decode(&newBook); err != nil {
-		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
-		logError(err, req, "Error when decoding JSON")
+	if err := c.ShouldBindJSON(&newBook); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON format"})
+		bs.logError(err, c, "Error when decoding JSON")
 		return
 	}
 
-	if _, exists := storage[newBook.ID]; exists {
-		http.Error(w, "Record already exists", http.StatusBadRequest)
+	if _, exists := bs.Storage[newBook.ID]; exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Record already exists"})
 		return
 	}
 
-	mu.Lock()
-	storage[newBook.ID] = newBook
-	mu.Unlock()
+	bs.Mu.Lock()
+	bs.Storage[newBook.ID] = newBook
+	bs.Mu.Unlock()
 
-	if err := json.NewEncoder(w).Encode(newBook); err != nil {
-		logError(err, req, "Error when encoding JSON")
-		return
-	}
+	c.JSON(http.StatusOK, newBook)
 }
 
-func updateBook(w http.ResponseWriter, req *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+func (bs *BookService) updateBook(c *gin.Context) {
 
-	vars := mux.Vars(req)
-	bookID := vars["id"]
+	bookID := c.Param("id")
 
 	var updatedBook Book
-	if err := json.NewDecoder(req.Body).Decode(&updatedBook); err != nil {
-		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
-		logError(err, req, "Error when decoding JSON")
+	if err := c.ShouldBindJSON(&updatedBook); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON format"})
+		bs.logError(err, c, "Error when decoding JSON")
 		return
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
+	bs.Mu.RLock()
+	defer bs.Mu.RUnlock()
 
-	_, exist := storage[bookID]
+	_, exist := bs.Storage[bookID]
 	if !exist {
-		http.Error(w, "Record not found", http.StatusNotFound)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Record not found"})
 		return
 	}
 
-	storage[bookID] = updatedBook
+	bs.Storage[bookID] = updatedBook
 
-	if err := json.NewEncoder(w).Encode(updatedBook); err != nil {
-		logError(err, req, "Error when encoding JSON")
-		return
-	}
+	c.JSON(http.StatusOK, updatedBook)
 }
 
-func deleteBook(w http.ResponseWriter, req *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+func (bs *BookService) deleteBook(c *gin.Context) {
+	bookID := c.Param("id")
 
-	vars := mux.Vars(req)
-	bookID := vars["id"]
+	bs.Mu.RLock()
+	defer bs.Mu.RUnlock()
 
-	mu.Lock()
-	defer mu.Unlock()
-
-	_, exist := storage[bookID]
+	_, exist := bs.Storage[bookID]
 	if !exist {
-		http.Error(w, "Record not found", http.StatusNotFound)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Record not found"})
 		return
 	}
 
-	delete(storage, bookID)
+	delete(bs.Storage, bookID)
 
-	if err := json.NewEncoder(w).Encode(map[string]string{"message": "Book deleted successfully"}); err != nil {
-		logError(err, req, "Error when encoding JSON")
-		return
-	}
+	c.JSON(http.StatusOK, gin.H{"message": "Book deleted successfully"})
 }
 
 func main() {
-	logrus.SetFormatter(&logrus.JSONFormatter{})
 
-	router := mux.NewRouter()
+	bs := &BookService{
+		Storage: make(map[string]Book),
+		Mu:      &sync.RWMutex{},
+		Logger:  logrus.New(),
+	}
 
-	router.HandleFunc("/book", returnAllBooks).Methods("GET")
-	router.HandleFunc("/book/{id}", returnBooksByID).Methods("GET")
-	router.HandleFunc("/book", createBook).Methods("POST")
-	router.HandleFunc("/book/{id}", updateBook).Methods("PUT")
-	router.HandleFunc("/book/{id}", deleteBook).Methods("DELETE")
+	bs.Logger.SetFormatter(&logrus.JSONFormatter{})
+
+	router := gin.Default()
+
+	router.GET("/book", bs.returnAllBooks)
+	router.GET("/book/:id", bs.returnBooksByID)
+	router.POST("/book", bs.createBook)
+	router.PUT("/book/:id", bs.updateBook)
+	router.DELETE("/book/:id", bs.deleteBook)
 
 	if err := http.ListenAndServe(":8080", router); err != nil {
 		logrus.WithFields(logrus.Fields{
