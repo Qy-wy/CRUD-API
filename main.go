@@ -28,6 +28,15 @@ func (bs *BookService) logError(err error, c *gin.Context, message string) {
 	}).Error(message)
 }
 
+func NoExist(exist bool, c *gin.Context) bool {
+	if !exist {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Record not found"})
+		return true
+	}
+
+	return false
+}
+
 func (bs *BookService) returnAllBooks(c *gin.Context) {
 	bs.Mu.RLock()
 	defer bs.Mu.RUnlock()
@@ -49,8 +58,7 @@ func (bs *BookService) returnBooksByID(c *gin.Context) {
 	book, exist := bs.Storage[bookID]
 	bs.Mu.RUnlock()
 
-	if !exist {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Record not found"})
+	if NoExist(exist, c) {
 		return
 	}
 
@@ -89,12 +97,12 @@ func (bs *BookService) updateBook(c *gin.Context) {
 		return
 	}
 
-	bs.Mu.RLock()
-	defer bs.Mu.RUnlock()
+	bs.Mu.Lock()
+	defer bs.Mu.Unlock()
 
 	_, exist := bs.Storage[bookID]
-	if !exist {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Record not found"})
+
+	if NoExist(exist, c) {
 		return
 	}
 
@@ -106,12 +114,12 @@ func (bs *BookService) updateBook(c *gin.Context) {
 func (bs *BookService) deleteBook(c *gin.Context) {
 	bookID := c.Param("id")
 
-	bs.Mu.RLock()
-	defer bs.Mu.RUnlock()
+	bs.Mu.Lock()
+	defer bs.Mu.Unlock()
 
 	_, exist := bs.Storage[bookID]
-	if !exist {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Record not found"})
+
+	if NoExist(exist, c) {
 		return
 	}
 
